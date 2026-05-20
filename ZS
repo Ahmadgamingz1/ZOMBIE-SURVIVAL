@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Zombie Survival</title>
+<style>
+  body {
+    margin: 0;
+    background: #111;
+    color: #fff;
+    font-family: sans-serif;
+    overflow: hidden;
+  }
+  #ui, #shop {
+    display: none;
+  }
+  #ui {
+    position: fixed;
+    top: 10px;
+    left: 10px;
+    background: rgba(0,0,0,0.6);
+    padding: 8px 10px;
+    border-radius: 4px;
+    font-size: 14px;
+  }
+  #shop {
+    position: fixed;
+    top: 10px;
+    right: 10px;
+    background: rgba(0,0,0,0.7);
+    padding: 8px 10px;
+    border-radius: 4px;
+    font-size: 13px;
+    max-width: 260px;
+  }
+  #shop button {
+    width: 100%;
+    margin: 2px 0;
+    cursor: pointer;
+  }
+  #menu {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.85);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    font-size: 32px;
+  }
+  #menu button {
+    margin-top: 20px;
+    font-size: 24px;
+    padding: 10px 20px;
+    cursor: pointer;
+  }
+  #prep {
+    position: fixed;
+    inset: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0,0,0,0.7);
+    font-size: 48px;
+  }
+  #gameOver {
+    position: fixed;
+    inset: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0,0,0,0.8);
+    color: #fff;
+    flex-direction: column;
+    font-size: 24px;
+  }
+  #gameOver button {
+    margin-top: 10px;
+    font-size: 18px;
+    padding: 6px 12px;
+    cursor: pointer;
+  }
+</style>
+</head>
+<body>
+
+<canvas id="game"></canvas>
+
+<!-- START MENU -->
+<div id="menu">
+  <div>ZOMBIE SURVIVAL</div>
+  <button id="startBtn">Start Game</button>
+</div>
+
+<!-- PREP TIMER -->
+<div id="prep">
+  <div id="prepText">Prepare: 5</div>
+</div>
+
+<!-- UI -->
+<div id="ui">
+  <div>Wave: <span id="wave">1</span></div>
+  <div>Money: $<span id="money">0</span></div>
+  <div>Gun: <span id="gunName">Pistol</span></div>
+  <div>Gun Level: <span id="gunLevel">1</span></div>
+  <div>HP: <span id="hp">100</span></div>
+</div>
+
+<!-- SHOP -->
+<div id="shop">
+  <h3>Shop</h3>
+  <button data-buy-gun="Pistol">Pistol (Free, dmg 10)</button>
+  <button data-buy-gun="Revolver">Revolver ($150, dmg 20)</button>
+  <button data-buy-gun="AR">AR ($300, dmg 5 each)</button>
+  <button data-buy-gun="Shotgun">Shotgun ($600, dmg 10 each)</button>
+  <button data-buy-gun="Sniper">Sniper ($1200, dmg 70)</button>
+  <button id="upgradeBtn">Upgrade Gun (+20% dmg, $200)</button>
+</div>
+
+<!-- GAME OVER -->
+<div id="gameOver">
+  <div>Game Over</div>
+  <div>Your Waves Survived: <span id="finalWave"></span></div>
+  <button id="restartBtn">Restart</button>
+</div>
+
+<script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+resizeCanvas();
+window.addEventListener('resize', resizeCanvas);
+
+function resizeCanvas() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+}
+
+const menu = document.getElementById("menu");
+const prepDiv = document.getElementById("prep");
+const prepText = document.getElementById("prepText");
+
+const waveSpan = document.getElementById('wave');
+const moneySpan = document.getElementById('money');
+const gunNameSpan = document.getElementById('gunName');
+const gunLevelSpan = document.getElementById('gunLevel');
+const hpSpan = document.getElementById('hp');
+const gameOverDiv = document.getElementById('gameOver');
+const finalWaveSpan = document.getElementById('finalWave');
+
+let keys = {};
+let mouse = { x: 0, y: 0, down: false };
+let player, bullets, zombies, wave, money, guns, currentGunKey, gameRunning;
+let zombieBaseHP, zombieBaseSpeed;
+let inPrep = false;
+let prepTime = 5;
+
+const GUN_DATA = {
+  Pistol:   { cost: 0,    baseDamage: 10, fireRate: 300, bulletsPerShot: 1, spread: 0 },
+  Revolver: { cost: 150,  baseDamage: 20, fireRate: 400, bulletsPerShot: 1, spread: 0 },
+  AR:       { cost: 300,  baseDamage: 5,  fireRate: 100, bulletsPerShot: 1, spread: 0.05 },
+  Shotgun:  { cost: 600,  baseDamage: 10, fireRate: 600, bulletsPerShot: 5, spread: 0.3 },
+  Sniper:   { cost: 1200, baseDamage: 70, fireRate: 800, bulletsPerShot: 1, spread: 0 }
+};
+
+function resetGame() {
+  player = { x: canvas.width/2, y: canvas.height/2, r: 15, speed: 3, hp: 100, lastShot: 0 };
+  bullets = [];
+  zombies = [];
+  wave = 1;
+  money = 0;
+  zombieBaseHP = 40;
+  zombieBaseSpeed = 0.7;
+  guns = {
+    Pistol: { owned: true, level: 1 },
+    Revolver: { owned: false, level: 1 },
+    AR: { owned: false, level: 1 },
+    Shotgun: { owned: false, level: 1 },
+    Sniper: { owned: false, level: 1 }
+  };
+  currentGunKey = "Pistol";
+  gameRunning = true;
+  startPrep();
+  updateUI();
+}
+
+function startPrep() {
+  inPrep = true;
+  prepTime = 5;
+  prepText.textContent = "Prepare: " + prepTime;
+  prepDiv.style.display = "flex";
+
+  const interval = setInterval(() => {
+    prepTime--;
+    prepText.textContent = "Prepare: " + prepTime;
+    if (prepTime <= 0) {
+      clearInterval(interval);
+      prepDiv.style.display = "none";
+      inPrep = false;
+      spawnWave();
+    }
+  }, 1000);
+}
+
+function spawnWave() {
+  zombies = [];
+  const count = 5 + wave * 2;
+  for (let i = 0; i < count; i++) {
+    const edge = Math.floor(Math.random() * 4);
+    let x, y;
+    if (edge === 0) { x = 0; y = Math.random() * canvas.height; }
+    else if (edge === 1) { x = canvas.width; y = Math.random() * canvas.height; }
+    else if (edge === 2) { x = Math.random() * canvas.width; y = 0; }
+    else { x = Math.random() * canvas.width; y = canvas.height; }
+
+    const hp = zombieBaseHP + Math.random() * 20;
+    const speed = zombieBaseSpeed + Math.random() * 0.4;
+    zombies.push({ x, y, r: 14, hp, maxHp: hp, speed });
+  }
+}
+
+function nextWave() {
+  wave++;
+  if (wave % 3 === 0) {
+    zombieBaseHP *= 1.25;
+    zombieBaseSpeed *= 1.15;
+  }
+  updateUI();
+  startPrep();
+}
+
+function updateUI() {
+  waveSpan.textContent = wave;
+  moneySpan.textContent = Math.floor(money);
+  gunNameSpan.textContent = currentGunKey;
+  gunLevelSpan.textContent = guns[currentGunKey].level;
+  hpSpan.textContent = Math.floor(player.hp);
+}
+
+window.addEventListener('keydown', e => keys[e.key.toLowerCase()] = true);
+window.addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
+canvas.addEventListener('mousemove', e => { mouse.x = e.clientX; mouse.y = e.clientY; });
+canvas.addEventListener('mousedown', () => mouse.down = true);
+canvas.addEventListener('mouseup', () => mouse.down = false);
+
+document.querySelectorAll('[data-buy-gun]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const gun = btn.getAttribute('data-buy-gun');
+    const data = GUN_DATA[gun];
+    const state = guns[gun];
+
+    if (!state.owned) {
+      if (money < data.cost) return;
+      money -= data.cost;
+      state.owned = true;
+    }
+
+    currentGunKey = gun;
+    updateUI();
+  });
+});
+
+document.getElementById("upgradeBtn").addEventListener("click", () => {
+  const gun = guns[currentGunKey];
+  if (money >= 200) {
+    money -= 200;
+    gun.level++;
+    updateUI();
+  }
+});
+
+document.getElementById("startBtn").addEventListener("click", () => {
+  menu.style.display = "none";
+  document.getElementById("ui").style.display = "block";
+  document.getElementById("shop").style.display = "block";
+
+  resetGame();
+  requestAnimationFrame(loop);
+});
+
+document.getElementById("restartBtn").addEventListener("click", () => {
+  gameOverDiv.style.display = "none";
+  resetGame();
+  requestAnimationFrame(loop);
+});
+
+function tryShoot(t) {
+  if (inPrep) return;
+  const gun = GUN_DATA[currentGunKey];
+  const state = guns[currentGunKey];
+  if (t - player.lastShot < gun.fireRate) return;
+  player.lastShot = t;
+
+  const dx = mouse.x - player.x;
+  const dy = mouse.y - player.y;
+  const baseAngle = Math.atan2(dy, dx);
+
+  for (let i = 0; i < gun.bulletsPerShot; i++) {
+    const angle = baseAngle + (Math.random() - 0.5) * gun.spread;
+    bullets.push({
+      x: player.x,
+      y: player.y,
+      vx: Math.cos(angle) * 8,
+      vy: Math.sin(angle) * 8,
+      r: 4,
+      damage: gun.baseDamage * Math.pow(1.2, state.level - 1)
+    });
+  }
+}
+
+function endGame() {
+  gameRunning = false;
+  finalWaveSpan.textContent = wave;
+  gameOverDiv.style.display = "flex";
+}
+
+let lastTime = 0;
+function loop(t) {
+  if (!gameRunning) return;
+
+  const dt = (t - lastTime) / 16.67;
+  lastTime = t;
+
+  update(dt, t);
+  draw();
+  requestAnimationFrame(loop);
+}
+
+function update(dt, t) {
+  let vx = 0, vy = 0;
+  if (keys['w']) vy -= 1;
+  if (keys['s']) vy += 1;
+  if (keys['a']) vx -= 1;
+  if (keys['d']) vx += 1;
+  const len = Math.hypot(vx, vy) || 1;
+  player.x += (vx/len) * player.speed * dt * 3;
+  player.y += (vy/len) * player.speed * dt * 3;
+
+  // BORDER LIMITS (PLAYER CANNOT ESCAPE)
+  const border = 40;
+  player.x = Math.max(border, Math.min(canvas.width - border, player.x));
+  player.y = Math.max(border, Math.min(canvas.height - border, player.y));
+
+  if (mouse.down) tryShoot(t);
+
+  bullets.forEach(b => { b.x += b.vx * dt; b.y += b.vy * dt; });
+  bullets = bullets.filter(b => b.x>-20 && b.x<canvas.width+20 && b.y>-20 && b.y<canvas.height+20);
+
+  if (!inPrep) {
+    zombies.forEach(z => {
+      const dx = player.x - z.x;
+      const dy = player.y - z.y;
+      const dist = Math.hypot(dx, dy) || 1;
+      z.x += (dx/dist) * z.speed * dt * 2;
+      z.y += (dy/dist) * z.speed * dt * 2;
+
+      if (dist < z.r + player.r) {
+        player.hp -= 0.1 * dt * 5;
+        if (player.hp <= 0) endGame();
+      }
+    });
+  }
+
+  // ZOMBIE SEPARATION
+  for (let i = 0; i < zombies.length; i++) {
+    for (let j = i + 1; j < zombies.length; j++) {
+      const a = zombies[i];
+      const b = zombies[j];
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const dist = Math.hypot(dx, dy);
+
+      if (dist < 30 && dist > 0) {
+        const push = (30 - dist) * 0.05;
+        const nx = dx / dist;
+        const ny = dy / dist;
+
+        a.x -= nx * push;
+        a.y -= ny * push;
+        b.x += nx * push;
+        b.y += ny * push;
+      }
+    }
+  }
+
+  for (let i = bullets.length - 1; i >= 0; i--) {
+    const b = bullets[i];
+    for (let j = zombies.length - 1; j >= 0; j--) {
+      const z = zombies[j];
+      if (Math.hypot(b.x - z.x, b.y - z.y) < b.r + z.r) {
+        z.hp -= b.damage;
+        bullets.splice(i, 1);
+        if (z.hp <= 0) {
+          zombies.splice(j, 1);
+          money += 5;
+        }
+        break;
+      }
+    }
+  }
+
+  if (!inPrep && zombies.length === 0) nextWave();
+  updateUI();
+}
+
+function draw() {
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  ctx.fillStyle = "#222";
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+
+  // DRAW BORDER
+  ctx.strokeStyle = "#555";
+  ctx.lineWidth = 8;
+  ctx.strokeRect(40, 40, canvas.width - 80, canvas.height - 80);
+
+  // PLAYER
+  ctx.save();
+  ctx.translate(player.x, player.y);
+  const angle = Math.atan2(mouse.y - player.y, mouse.x - player.x);
+  ctx.rotate(angle);
+  ctx.fillStyle = "#4af";
+  ctx.beginPath();
+  ctx.arc(0,0,player.r,0,Math.PI*2);
+  ctx.fill();
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0,-4,player.r+10,8);
+  ctx.restore();
+
+  // BULLETS
+  ctx.fillStyle = "#ff0";
+  bullets.forEach(b => {
+    ctx.beginPath();
+    ctx.arc(b.x,b.y,b.r,0,Math.PI*2);
+    ctx.fill();
+  });
+
+  // ZOMBIES + HP BARS
+  zombies.forEach(z => {
+    ctx.fillStyle = "#0f0";
+    ctx.beginPath();
+    ctx.arc(z.x, z.y, z.r, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "#800";
+    ctx.fillRect(z.x - 20, z.y - z.r - 15, 40, 6);
+
+    const hpPercent = z.hp / z.maxHp;
+    ctx.fillStyle = "#0f0";
+    ctx.fillRect(z.x - 20, z.y - z.r - 15, 40 * hpPercent, 6);
+
+    ctx.fillStyle = "#fff";
+    ctx.font = "12px Arial";
+    ctx.textAlign = "center";
+    ctx.fillText(Math.floor(z.hp), z.x, z.y - z.r - 20);
+  });
+}
+
+</script>
+</body>
+</html>
